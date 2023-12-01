@@ -55,6 +55,36 @@ class WelcomeScreen extends StatelessWidget {
   }
 }
 
+class FavoriteEBooksScreen extends StatelessWidget {
+  final List<EBook> favoriteEbooksList;
+  final Function(EBook) onDownload;
+  final Function(EBook) onOpen;
+  final Function(EBook) onFavoriteToggle;
+
+  const FavoriteEBooksScreen({
+    required this.favoriteEbooksList,
+    required this.onDownload,
+    required this.onOpen,
+    required this.onFavoriteToggle,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('E-books Favoritos'),
+      ),
+      body: EBookListWidget(
+        ebooks: favoriteEbooksList,
+        onDownload: onDownload,
+        onOpen: onOpen,
+        favoriteEbooksList: favoriteEbooksList,
+        onFavoriteToggle: onFavoriteToggle,
+      ),
+    );
+  }
+}
+
 class EBook {
   final int id;
   final String title;
@@ -62,6 +92,7 @@ class EBook {
   final String coverUrl;
   final String downloadUrl;
   String localPath;
+  bool isFavorite; // Nova propriedade para rastrear o status de favorito
 
   EBook({
     required this.id,
@@ -70,6 +101,7 @@ class EBook {
     required this.coverUrl,
     required this.downloadUrl,
     required this.localPath,
+    required this.isFavorite,
   });
 
   factory EBook.fromJson(Map<String, dynamic> json) {
@@ -80,6 +112,7 @@ class EBook {
       coverUrl: json['cover_url'] as String,
       downloadUrl: json['download_url'] as String,
       localPath: "",
+      isFavorite: false,
     );
   }
 }
@@ -88,11 +121,13 @@ class EBookCard extends StatelessWidget {
   final EBook ebook;
   final Function(EBook) onDownload;
   final Function(EBook) onOpen;
+  final Function(EBook)? onFavoriteToggle;
 
   const EBookCard({
     required this.ebook,
     required this.onDownload,
     required this.onOpen,
+    required this.onFavoriteToggle,
   });
 
   @override
@@ -113,6 +148,20 @@ class EBookCard extends StatelessWidget {
               icon: Icon(Icons.open_in_browser),
               onPressed: () => onOpen(ebook),
             ),
+            IconButton(
+              icon: Icon(
+                ebook.isFavorite ? Icons.favorite : Icons.favorite_border,
+                color: ebook.isFavorite ? Colors.red : null,
+              ),
+              onPressed: () {
+                if (onFavoriteToggle != null) {
+                  onFavoriteToggle!(ebook);
+                } else {
+                  // Lógica adicional, se necessário, quando onFavoriteToggle é null
+                  print('onFavoriteToggle is null! $onFavoriteToggle');
+                }
+              },
+            ),
           ],
         ),
       ),
@@ -125,6 +174,7 @@ class _MyAppState extends State<MyApp> {
   Dio dio = Dio();
   String filePath = "";
   late List<EBook> ebooksList = [];
+  late List<EBook> favoriteEbooksList = []; // Nova lista para favoritos
   bool acceptedPermissions = false;
 
   @override
@@ -132,6 +182,39 @@ class _MyAppState extends State<MyApp> {
     super.initState();
     loadAcceptedPermissions(); // Verifique se as permissões já foram aceitas
     loadEBooks();
+  }
+
+  void toggleFavorite(EBook ebook) {
+    setState(() {
+      ebook.isFavorite = !ebook.isFavorite;
+
+      if (ebook.isFavorite) {
+        favoriteEbooksList.add(ebook);
+      } else {
+        favoriteEbooksList.removeWhere((favEbook) => favEbook.id == ebook.id);
+      }
+
+      // Salva os IDs dos ebooks favoritos no SharedPreferences
+      List<String> favoriteIds =
+          favoriteEbooksList.map((favEbook) => favEbook.id.toString()).toList();
+      SharedPreferences.getInstance().then((prefs) {
+        prefs.setStringList('favorite_ebook_ids', favoriteIds);
+      });
+    });
+  }
+
+  Future<void> loadFavoriteEBooks() async {
+    SharedPreferences prefs = await SharedPreferences.getInstance();
+    List<String>? favoriteIds = prefs.getStringList('favorite_ebook_ids');
+
+    if (favoriteIds != null) {
+      List<EBook> favorites = ebooksList
+          .where((ebook) => favoriteIds.contains(ebook.id.toString()))
+          .toList();
+      setState(() {
+        favoriteEbooksList = favorites;
+      });
+    }
   }
 
   Future<void> loadAcceptedPermissions() async {
@@ -224,9 +307,10 @@ class _MyAppState extends State<MyApp> {
 
   void loadEBooks() async {
     try {
-      List<EBook> ebooks = await fetchEBooks();
+      List<EBook> allEbooks = await fetchEBooks();
+      await loadFavoriteEBooks(); // Carrega os ebooks favoritos
       setState(() {
-        ebooksList = ebooks;
+        ebooksList = allEbooks;
       });
     } catch (e) {
       print('Error loading e-books: $e');
@@ -242,15 +326,38 @@ class _MyAppState extends State<MyApp> {
               appBar: AppBar(
                 title: const Text('E-book Reader'),
               ),
-              body: EBookListWidget(
-                ebooks: ebooksList,
-                onDownload: onDownload,
-                onOpen: onOpen,
+              body: Column(
+                children: [
+                  ElevatedButton(
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (context) => FavoriteEBooksScreen(
+                            favoriteEbooksList: favoriteEbooksList,
+                            onDownload: onDownload,
+                            onOpen: onOpen,
+                            onFavoriteToggle: toggleFavorite,
+                          ),
+                        ),
+                      );
+                    },
+                    child: Text('Ver Favoritos'),
+                  ),
+                  Expanded(
+                    child: EBookListWidget(
+                      ebooks: ebooksList, // Corrigir para usar ebooksList
+                      onDownload: onDownload,
+                      onOpen: onOpen,
+                      favoriteEbooksList: favoriteEbooksList,
+                      onFavoriteToggle: toggleFavorite,
+                    ),
+                  ),
+                ],
               ),
             )
           : WelcomeScreen(
-              onAccept:
-                  requestPermissions, // Atualizado para chamar requestPermissions
+              onAccept: requestPermissions,
             ),
     );
   }
@@ -501,25 +608,38 @@ class _MyAppState extends State<MyApp> {
 class EBookListWidget extends StatelessWidget {
   final List<EBook> ebooks;
   final Function(EBook) onDownload;
+  final List<EBook> favoriteEbooksList;
   final Function(EBook) onOpen;
+  final Function(EBook)? onFavoriteToggle;
 
   const EBookListWidget({
     required this.ebooks,
     required this.onDownload,
     required this.onOpen,
+    required this.favoriteEbooksList,
+    this.onFavoriteToggle,
   });
 
   @override
   Widget build(BuildContext context) {
     return ListView.builder(
-      itemCount: ebooks.length,
+      itemCount: ebooks.length, // Corrigir para usar todos os eBooks
       itemBuilder: (context, index) {
-        return EBookCard(
-          ebook: ebooks[index],
-          onDownload: onDownload,
-          onOpen: onOpen,
-        );
+        return buildCardWidget(ebooks[index], onFavoriteToggle);
       },
+    );
+  }
+
+  Widget buildCardWidget(EBook ebook, Function(EBook)? onFavoriteToggle) {
+    return EBookCard(
+      ebook: ebook,
+      onDownload: onDownload,
+      onOpen: onOpen,
+      onFavoriteToggle: onFavoriteToggle ??
+          (ebook) {
+            // Lógica padrão ou vazia, se onFavoriteToggle não for fornecido
+            print('onFavoriteToggle não foi fornecido!');
+          },
     );
   }
 }
